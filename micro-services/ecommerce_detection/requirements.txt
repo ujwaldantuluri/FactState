@@ -1,0 +1,30 @@
+fastapi
+uvicorn
+requests
+beautifulsoup4
+httpx
+pydantic
+python-dotenv
+tldextract
+pillow
+scikit-learn
+numpy
+whois
+lxml
+aiofiles         # For handling uploads if needed
+python-whois     # Alternative whois if the first doesn't work
+idna             # Domain internationalization
+validators       # For URL validation
+email-validator  # If you're checking fake signups or email forms
+gunicorn         # For production deployment (optional)
+langdetect       # For language detection in text
+transformers     # For AI text detection (HuggingFace)
+torch            # Required if transformers model is used
+joblib           # For ML model serialization
+fastapi
+uvicorn
+requests
+beautifulsoup4
+python-whois
+Pillow
+imagehash

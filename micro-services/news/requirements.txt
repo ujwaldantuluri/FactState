@@ -1,0 +1,12 @@
+pinecone-client
+langchain
+langchain-google-genai
+langchain-ollama
+python-dotenv
+beautifulsoup4
+requests
+google-ai-generativelanguage
+
+# Direct Gemini SDKs used by the codebase
+google-genai
+google-generativeai

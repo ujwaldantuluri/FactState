@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+ENV/
+env/
+
+# Environment files (keep .env.example)
+.env
+
+# Logs / runtime artifacts
+*.log
+*.out
+*.err
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific generated outputs
+micro-services/news/news_output.txt
+micro-services/news/news_summary_and_articles.txt
