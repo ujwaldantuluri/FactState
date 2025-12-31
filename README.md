@@ -260,3 +260,11 @@ AI_IMAGE_MODEL_CACHE_DIR=./models_cache
 
   `.\.venv\Scripts\python.exe -m uvicorn micro-services.main:app ...`
 
+📌 J. Demo Video
+
+🎥 Project Walkthrough & Live Demo
+Watch the complete demo of Trustify — including Web UI, detectors, dashboard, and WhatsApp integration:
+
+👉 Demo Video:
+🔗 https://youtu.be/21et-L0VlxI?si=4SEHHDtm5aH9mbnR
+
