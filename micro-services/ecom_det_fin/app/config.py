@@ -1,5 +1,5 @@
 from __future__ import annotations
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 import json
 
@@ -15,7 +15,13 @@ DEFAULT_WEIGHTS = {
 }
 
 class Settings(BaseSettings):
-    app_name: str = "FactState API"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    app_name: str = "Trustify API"
     db_url: str = Field(default="sqlite:///data/app.db", alias="DB_URL")
     risk_weights_json: str | None = Field(default=None, alias="RISK_WEIGHTS_JSON")
 
@@ -114,11 +120,6 @@ class Settings(BaseSettings):
         "stripe", "paypal", "razorpay", "payu", "cashfree", "instamojo", "square", 
         "shopify payments", "woocommerce", "authorize.net"
     ])
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
 
     @property
     def weights(self) -> dict[str, float]:

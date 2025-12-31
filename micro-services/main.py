@@ -1,30 +1,20 @@
 import os
 import sys
-import logging
 
-try:
-    from dotenv import load_dotenv
-except Exception:  # pragma: no cover
-    load_dotenv = None
+from dotenv import load_dotenv
 
-# Ensure local modules (e.g., news/, job_offers/, checks.py) are importable when
-# running via Uvicorn from the repo root on Windows.
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+# Allow running this service from the repo root (e.g. `uvicorn micro-services.main:app`).
+# Adds the `micro-services/` directory to `sys.path` so `news/`, `job_offers/`, etc. can be imported.
+sys.path.insert(0, os.path.dirname(__file__))
 
-# Load environment variables from .env (repo root and micro-services/) so
-# downstream modules that use os.getenv() can access them.
-if load_dotenv is not None:
-    repo_root = os.path.abspath(os.path.join(BASE_DIR, ".."))
-    load_dotenv(os.path.join(repo_root, ".env"), override=False)
-    load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
+# Load environment variables from the repo root `.env` (needed for Gemini keys, etc.).
+load_dotenv(dotenv_path=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env")), override=False)
 
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Any, Dict
-from news.news_api import check_news_truth, GeminiQuotaError
+from news.news_api import check_news_truth
 from job_offers.job_main import analyze_job_offer
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -33,6 +23,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import json
 
 # Add imports for analyze route
 from urllib.parse import urlparse
@@ -54,95 +45,81 @@ from ecom_det_fin.app.models.schemas import (
     CheckSiteRequest as EcommerceAnalysisRequest,
     RiskResult,
     FeedbackRequest as EcommerceFeedbackRequest,
+    SiteHistoryResponse,
+    HistoryPoint,
 )
+from ecom_det_fin.app.db import init_db as _init_ecom_db, engine as _ecom_engine
+from ecom_det_fin.app.models.tables import SiteScan as EcommerceSiteScan, ScanLog
+from sqlmodel import Session as SQLSession, select
 from datetime import datetime
-# Image detection imports
-from PIL import Image, UnidentifiedImageError
-import io
+from datetime import timedelta
+from fastapi import Query
+
+# Image detection
+# NOTE: torch/transformers often fail to import on Windows if the correct wheels/VC++ runtime
+# aren't present. To keep the main backend usable, we lazy-load these deps only when the
+# /image/analyze endpoint is called.
+_image_model = None
+_image_processor = None
+_image_model_load_error = None
 
 
-logger = logging.getLogger(__name__)
-
-
-torch = None
-image_model = None
-image_processor = None
-_image_model_error: str | None = None
-_image_model_loaded = False
-
-# Image model location strategy:
-# - Prefer local cache created by detect-fake-imagee/download_model2.py (models_cache)
-# - Fall back to the original snapshot-style directory if present
-image_model_cache_dir = os.path.join(BASE_DIR, "..", "detect-fake-imagee", "models_cache")
-image_model_snapshot_root = os.path.join(
-    BASE_DIR,
-    "..",
-    "detect-fake-imagee",
-    "ai-image-detector-model2",
-    "models--Ateeqq--ai-vs-human-image-detector",
-    "snapshots",
-)
-
-# Hugging Face model id
-IMAGE_MODEL_ID = "Ateeqq/ai-vs-human-image-detector"
-
-def _ensure_image_model_loaded() -> None:
-    """Lazy-load the image detection model.
-
-    On some Windows setups, importing torch at process startup can fail due to
-    missing DLL dependencies (WinError 1114). We load on-demand so the API can
-    still boot and serve non-image endpoints.
-    """
-    global torch, image_model, image_processor, _image_model_error, _image_model_loaded
-
-    if _image_model_loaded or _image_model_error:
+def _ensure_image_model_loaded():
+    global _image_model, _image_processor, _image_model_load_error
+    if _image_model is not None and _image_processor is not None:
         return
+    if _image_model_load_error is not None:
+        raise RuntimeError(_image_model_load_error)
+
+    # Windows-specific: help Python find bundled Torch DLLs first.
+    # In some setups (especially with Anaconda-based Python), DLL resolution can pick up
+    # conflicting runtimes from PATH, causing WinError 1114 when importing torch.
+    try:
+        for p in sys.path:
+            cand = os.path.join(p, "torch", "lib")
+            if os.path.isdir(cand):
+                os.add_dll_directory(cand)
+                break
+    except Exception:
+        pass
 
     try:
-        import torch as _torch
         from transformers import AutoModelForImageClassification, AutoImageProcessor
-
-        # 1) Prefer local cache directory (created by download_model2.py)
-        if os.path.isdir(image_model_cache_dir) and os.listdir(image_model_cache_dir):
-            image_model = AutoModelForImageClassification.from_pretrained(
-                IMAGE_MODEL_ID,
-                cache_dir=image_model_cache_dir,
-            )
-            image_processor = AutoImageProcessor.from_pretrained(
-                IMAGE_MODEL_ID,
-                cache_dir=image_model_cache_dir,
-                use_fast=True,
-            )
-        # 2) If snapshot-style folder exists, load from the first snapshot
-        elif os.path.isdir(image_model_snapshot_root):
-            snapshots = [
-                d for d in os.listdir(image_model_snapshot_root)
-                if os.path.isdir(os.path.join(image_model_snapshot_root, d))
-            ]
-            if not snapshots:
-                raise RuntimeError(f"No snapshot directories found in {image_model_snapshot_root}")
-            snapshot_dir = os.path.join(image_model_snapshot_root, snapshots[0])
-
-            image_model = AutoModelForImageClassification.from_pretrained(snapshot_dir)
-            image_processor = AutoImageProcessor.from_pretrained(snapshot_dir, use_fast=True)
-        # 3) Last resort: download to cache dir
-        else:
-            os.makedirs(image_model_cache_dir, exist_ok=True)
-            image_model = AutoModelForImageClassification.from_pretrained(
-                IMAGE_MODEL_ID,
-                cache_dir=image_model_cache_dir,
-            )
-            image_processor = AutoImageProcessor.from_pretrained(
-                IMAGE_MODEL_ID,
-                cache_dir=image_model_cache_dir,
-                use_fast=True,
-            )
-
-        torch = _torch
-        _image_model_loaded = True
+        from PIL import Image  # noqa: F401
+        import torch  # noqa: F401
     except Exception as e:
-        # Keep full exception type for easier debugging (e.g., torch DLL load errors on Windows)
-        _image_model_error = f"{type(e).__name__}: {e}"
+        _image_model_load_error = (
+            "Image analysis dependencies failed to import. "
+            "Install a working PyTorch build for your Python version/CPU and ensure the "
+            "Microsoft Visual C++ Redistributable is installed. Original error: "
+            f"{e}"
+        )
+        raise RuntimeError(_image_model_load_error)
+
+    # Load image model and processor.
+    # Prefer a Hugging Face model id and a local cache directory so it works across machines
+    # and matches `detect-fake-imagee/download_model2.py`.
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    default_cache_dir = os.path.abspath(
+        os.path.join(base_dir, "..", "detect-fake-imagee", "models_cache")
+    )
+    model_id = os.getenv("AI_IMAGE_MODEL_ID", "Ateeqq/ai-vs-human-image-detector")
+    cache_dir = os.getenv("AI_IMAGE_MODEL_CACHE_DIR", default_cache_dir)
+
+    try:
+        _image_model = AutoModelForImageClassification.from_pretrained(
+            model_id, cache_dir=cache_dir
+        )
+        _image_processor = AutoImageProcessor.from_pretrained(
+            model_id, cache_dir=cache_dir, use_fast=True
+        )
+    except Exception as e:
+        _image_model_load_error = (
+            "Failed to load the image model. "
+            "If you're offline, run `detect-fake-imagee/download_model2.py` once to cache it. "
+            f"Model: {model_id}. Cache dir: {cache_dir}. Error: {e}"
+        )
+        raise RuntimeError(_image_model_load_error)
 
 class NewsRequest(BaseModel):
     query: str
@@ -167,6 +144,42 @@ class UrlRequest(BaseModel):
 
 app = FastAPI()
 
+
+def _safe_log_scan(
+    *,
+    scan_type: str,
+    content: str,
+    url: str | None,
+    verdict: str,
+    risk_score: float,
+    extra: dict | None = None,
+) -> None:
+    """Best-effort scan logging; never breaks the main endpoint."""
+
+    try:
+        with SQLSession(_ecom_engine) as session:
+            row = ScanLog(
+                scan_type=scan_type,
+                content=content,
+                url=url,
+                verdict=verdict,
+                risk_score=float(risk_score),
+                created_at=datetime.utcnow(),
+                extra_json=json.dumps(extra or {}),
+            )
+            session.add(row)
+            session.commit()
+    except Exception:
+        # Intentionally swallow all errors to keep API stable.
+        return
+
+
+@app.on_event("startup")
+def _startup_init_db():
+    # Enable real persistence for advanced e-commerce scans + history.
+    # Uses ecom_det_fin SQLite DB by default: sqlite:///data/app.db
+    _init_ecom_db()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Or specify your frontend URL(s)
@@ -179,24 +192,74 @@ app.add_middleware(
 def verify_news(request: NewsRequest):
     try:
         result = check_news_truth(request.query)
-        return {"result": result}
-    except GeminiQuotaError as e:
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                "Gemini API quota exhausted for this project/key. "
-                "Check https://ai.dev/usage?tab=rate-limit and your billing/plan. "
-                f"Raw error: {str(e)}"
-            ),
+        verdict_overall = (result or {}).get("verdict") or "Uncertain"
+        verdict_norm = str(verdict_overall).strip().lower()
+        if verdict_norm == "true":
+            ui_verdict = "Authentic"
+            risk_score = 10.0
+        elif verdict_norm == "false":
+            ui_verdict = "Fake"
+            risk_score = 90.0
+        elif verdict_norm == "error":
+            ui_verdict = "Error"
+            risk_score = 50.0
+        else:
+            ui_verdict = "Suspicious"
+            risk_score = 50.0
+
+        _safe_log_scan(
+            scan_type="Fake News",
+            content=(request.query or "")[:300],
+            url=None,
+            verdict=ui_verdict,
+            risk_score=risk_score,
+            extra={"source": "news/verify", "raw_verdict": verdict_overall},
         )
+        return {"result": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return a stable shape so the frontend can render an error state without breaking.
+        return {
+            "result": {
+                "verdict": "Error",
+                "explanation": str(e),
+                "parsed_output": {
+                    "verdict_overall": "Uncertain",
+                    "claims": [],
+                    "sources_used": [],
+                    "explanation": "",
+                },
+                "grounding_metadata": {
+                    "search_queries": [],
+                    "sources": [],
+                    "claims_analysis": [],
+                },
+            }
+        }
 
 @app.post("/job/analyze")
 def analyze_job(request: JobRequest):
     try:
         result = analyze_job_offer(request.dict())
-        return {"result": result.dict()}
+        payload = result.dict()
+        confidence = float(payload.get("confidence_score") or 0.0)
+        risk_level = str(payload.get("risk_level") or "").upper()
+        if risk_level in {"CRITICAL", "HIGH"}:
+            verdict = "Scam"
+        elif risk_level == "MEDIUM":
+            verdict = "Suspicious"
+        else:
+            verdict = "Safe"
+
+        content = payload.get("final_prediction_reason") or (request.job_description or "")
+        _safe_log_scan(
+            scan_type="Job Posting",
+            content=str(content)[:300],
+            url=str(request.website) if request.website else None,
+            verdict=verdict,
+            risk_score=confidence,
+            extra={"source": "job/analyze", "risk_level": risk_level},
+        )
+        return {"result": payload}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -250,7 +313,7 @@ async def analyze(data: UrlRequest):
         # ✅ Final verdict
         verdict = "Unsafe" if risk_score >= 3 else "Safe"
 
-        return {
+        payload = {
             "domain": domain_info,
             "ssl": ssl_info,
             "logo": logo_info,
@@ -262,6 +325,19 @@ async def analyze(data: UrlRequest):
             "risk_score": risk_score,
             "verdict": verdict,
         }
+
+        # Convert 0..8 checks into a 0..100-ish score for UI consistency.
+        risk_percent = float(min(100.0, max(0.0, risk_score * 12.5)))
+        _safe_log_scan(
+            scan_type="E-commerce",
+            content=domain_name,
+            url=str(url),
+            verdict="High Risk" if verdict == "Unsafe" else "Verified Safe",
+            risk_score=risk_percent,
+            extra={"source": "analyze", "raw_risk_score": risk_score, "raw_verdict": verdict},
+        )
+
+        return payload
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -270,34 +346,21 @@ async def analyze(data: UrlRequest):
 async def analyze_image(file: UploadFile = File(...)):
     try:
         _ensure_image_model_loaded()
-        if _image_model_error or not _image_model_loaded or image_model is None or image_processor is None or torch is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Image model unavailable in this environment. "
-                    "If you see a torch DLL error on Windows, install the Microsoft Visual C++ Redistributable "
-                    "and reinstall a compatible PyTorch build. "
-                    f"Underlying error: {_image_model_error}"
-                ),
-            )
+        from PIL import Image
+        import torch
+        import io
 
         # Read and preprocess image
         contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail="No file content received.")
-
-        try:
-            image = Image.open(io.BytesIO(contents)).convert("RGB")
-        except UnidentifiedImageError:
-            raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.")
-        inputs = image_processor(images=image, return_tensors="pt")
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
+        inputs = _image_processor(images=image, return_tensors="pt")
 
         # Inference
         with torch.no_grad():
-            outputs = image_model(**inputs)
+            outputs = _image_model(**inputs)
             probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
 
-        labels = image_model.config.id2label
+        labels = _image_model.config.id2label
         # Map raw label->probability
         result = {str(labels[i]): float(p) for i, p in enumerate(probs[0])}
         print("image model raw labels:", result)
@@ -348,15 +411,26 @@ async def analyze_image(file: UploadFile = File(...)):
         except Exception:
             meta = None
 
+        ai_percent = float(round(normalized.get("ai", 0.0) * 100.0, 2))
+        ui_verdict = "AI Generated" if normalized.get("ai", 0.0) >= 0.5 else "Human Made"
+
         payload = {"prediction": normalized, "labels": result, "metadata": meta}
         print("image model payload:", payload)
+
+        _safe_log_scan(
+            scan_type="AI Image",
+            content=str(getattr(file, "filename", "image"))[:300],
+            url=None,
+            verdict=ui_verdict,
+            risk_score=ai_percent,
+            extra={"source": "image/analyze"},
+        )
         return JSONResponse(content=payload)
     except HTTPException:
         raise
     except Exception as e:
-        # Preserve stack trace in server logs while returning a clean error to clients.
-        logger.exception("Image analysis failed")
-        raise HTTPException(status_code=500, detail=f"Image analysis failed: {type(e).__name__}: {e}")
+        # If torch/transformers can't load (common on Windows), keep a clear actionable error.
+        raise HTTPException(status_code=503, detail=f"Image analysis unavailable: {str(e)}")
 
 
 # Advanced E-commerce Detection Endpoints
@@ -367,28 +441,171 @@ async def analyze_ecommerce_advanced(request: EcommerceAnalysisRequest):
     Provides comprehensive risk assessment with detailed explanations.
     """
     try:
-        # Run the comprehensive analysis
-        score, reasons = await evaluate_all(str(request.url), session=None)
+        with SQLSession(_ecom_engine) as session:
+            # Run the comprehensive analysis (real-time)
+            score, reasons = await evaluate_all(str(request.url), session=session)
 
-        # Apply safety gates to align with ecom_det_fin behavior
-        reason_list = [
-            {"layer": r.layer, "message": r.message, "weight": r.weight, "score": r.score}
-            for r in reasons
-        ]
-        adjusted_score, gated_badge = apply_safety_gates(str(request.url), reason_list, score)
-        payment, actions = advice_for(adjusted_score)
+            # Apply safety gates to align with ecom_det_fin behavior
+            reason_list = [
+                {"layer": r.layer, "message": r.message, "weight": r.weight, "score": r.score}
+                for r in reasons
+            ]
+            adjusted_score, gated_badge = apply_safety_gates(str(request.url), reason_list, score)
+            payment, actions = advice_for(adjusted_score)
 
-        return {
-            "url": request.url,
-            "risk_score": adjusted_score,
-            "badge": gated_badge,
-            "reasons": reason_list,
-            "advice": {"payment": payment, "actions": actions},
-            "scanned_at": datetime.utcnow().isoformat(),
-            "analysis_type": "advanced",
-        }
+            scan = EcommerceSiteScan(
+                url=str(request.url),
+                risk_score=adjusted_score,
+                badge=gated_badge,
+                reasons_json=json.dumps(reason_list),
+                scanned_at=datetime.utcnow(),
+            )
+            session.add(scan)
+            session.commit()
+
+            try:
+                _safe_log_scan(
+                    scan_type="E-commerce",
+                    content=urlparse(str(request.url)).netloc.replace("www.", "") or str(request.url),
+                    url=str(request.url),
+                    verdict=gated_badge,
+                    risk_score=float(adjusted_score),
+                    extra={"source": "ecommerce/analyze-advanced", "analysis_type": "advanced"},
+                )
+            except Exception:
+                pass
+
+            return {
+                "url": request.url,
+                "risk_score": adjusted_score,
+                "badge": gated_badge,
+                "reasons": reason_list,
+                "advice": {"payment": payment, "actions": actions},
+                "scanned_at": scan.scanned_at.isoformat(),
+                "analysis_type": "advanced",
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Advanced e-commerce analysis failed: {str(e)}")
+
+
+def _icon_for_type(scan_type: str) -> str:
+    t = (scan_type or "").lower()
+    if "news" in t:
+        return "📰"
+    if "e-commerce" in t or "ecommerce" in t:
+        return "🛍️"
+    if "job" in t:
+        return "🧑‍💼"
+    if "image" in t:
+        return "📷"
+    return "📊"
+
+
+@app.get("/api/history")
+def api_history(limit: int = Query(50, ge=1, le=200)):
+    try:
+        with SQLSession(_ecom_engine) as session:
+            rows = session.exec(
+                select(ScanLog).order_by(ScanLog.created_at.desc()).limit(limit)
+            ).all()
+
+        return {
+            "items": [
+                {
+                    "id": str(r.id),
+                    "type": r.scan_type,
+                    "content": r.content,
+                    "url": r.url,
+                    "verdict": r.verdict,
+                    "riskScore": float(r.risk_score),
+                    "timestamp": r.created_at.isoformat(),
+                    "icon": _icon_for_type(r.scan_type),
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"History lookup failed: {str(e)}")
+
+
+@app.delete("/api/history/{scan_id}")
+def api_delete_history_item(scan_id: int):
+    try:
+        with SQLSession(_ecom_engine) as session:
+            row = session.get(ScanLog, scan_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="History item not found")
+            session.delete(row)
+            session.commit()
+        return {"status": "deleted", "id": scan_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+
+@app.get("/api/stats")
+def api_stats():
+    try:
+        now = datetime.utcnow()
+        today_start = datetime(year=now.year, month=now.month, day=now.day)
+
+        fake_verdicts = {
+            "fake",
+            "scam",
+            "ai generated",
+            "deepfake",
+            "high risk",
+            "critical risk",
+            "unsafe",
+        }
+        safe_verdicts = {
+            "safe",
+            "verified safe",
+            "authentic",
+            "low risk",
+            "human made",
+            "human written",
+        }
+
+        with SQLSession(_ecom_engine) as session:
+            all_rows = session.exec(select(ScanLog)).all()
+
+        total = len(all_rows)
+        scans_today = sum(1 for r in all_rows if r.created_at >= today_start)
+        fake_detected = sum(1 for r in all_rows if (r.verdict or "").strip().lower() in fake_verdicts)
+        safe_content = sum(1 for r in all_rows if (r.verdict or "").strip().lower() in safe_verdicts)
+        accuracy = round((safe_content / total) * 100.0, 2) if total else 0.0
+
+        return {
+            "scansToday": scans_today,
+            "accuracy": accuracy,
+            "totalScans": total,
+            "fakeDetected": fake_detected,
+            "safeContent": safe_content,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stats lookup failed: {str(e)}")
+
+
+@app.get("/api/site-history", response_model=SiteHistoryResponse)
+async def ecommerce_site_history(url: str):
+    try:
+        with SQLSession(_ecom_engine) as session:
+            q = (
+                select(EcommerceSiteScan)
+                .where(EcommerceSiteScan.url == str(url))
+                .order_by(EcommerceSiteScan.scanned_at.asc())
+            )
+            rows = session.exec(q).all()
+        if not rows:
+            raise HTTPException(status_code=404, detail="No scans for this URL yet")
+        timeline = [HistoryPoint(scanned_at=r.scanned_at, risk_score=r.risk_score, badge=r.badge) for r in rows]
+        return SiteHistoryResponse(url=url, timeline=timeline)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"History lookup failed: {str(e)}")
 
 
 @app.post("/ecommerce/feedback")

@@ -1,113 +1,32 @@
 import os
 import json
-import time
 
-try:
-    from dotenv import load_dotenv
-except Exception:  # pragma: no cover
-    load_dotenv = None
-
-try:
-    # New Google GenAI SDK (package: google-genai)
-    from google import genai  # type: ignore
-    from google.genai import types  # type: ignore
-except Exception:  # pragma: no cover
-    genai = None
-    types = None
+import google.generativeai as genai
 
 
-def _safe_str(value: object) -> str:
-    try:
-        return str(value)
-    except Exception:
-        return repr(value)
+def _is_model_not_found_error(err: Exception) -> bool:
+  msg = str(err).lower()
+  return (
+    "is not found" in msg
+    or "models/" in msg
+    or "not supported" in msg
+    or "listmodels" in msg
+  )
 
 
-def _extract_model_name(model_obj: object) -> str | None:
-    """Best-effort extraction of a model name from google-genai model objects."""
-    for attr in ("name", "model", "id"):
-        try:
-            val = getattr(model_obj, attr)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
-        except Exception:
-            pass
-    return None
-
-
-def _model_supports_generate_content(model_obj: object) -> bool:
-    """Heuristic check for whether a model supports generateContent."""
-    for attr in ("supported_actions", "supported_methods", "supportedGenerationMethods", "supported_generation_methods"):
-        try:
-            val = getattr(model_obj, attr)
-            if not val:
-                continue
-            # Normalize iterable -> list[str]
-            items = [str(x) for x in (val if isinstance(val, (list, tuple, set)) else [val])]
-            joined = " ".join(items).lower()
-            if "generate" in joined or "generatecontent" in joined or "generate_content" in joined:
-                return True
-        except Exception:
-            continue
-    # If we can't tell, assume true and let the API reject it.
-    return True
-
-
-def _list_available_models(client) -> list[object]:
-    try:
-        iterable = client.models.list()
-        return list(iterable)
-    except Exception:
-        return []
-
-
-def _pick_fallback_model(client, preferred: str) -> str:
-    """Pick a model name that exists for this key/project.
-
-    - Prefer env-provided `preferred` if it's available.
-    - Otherwise choose a reasonable default from the available model list.
-    """
-    preferred = (preferred or "").strip()
-    available = _list_available_models(client)
-    names: list[str] = []
-    for m in available:
-        name = _extract_model_name(m)
-        if name:
-            names.append(name)
-
-    # Normalize names to comparable forms.
-    norm = {n.replace("models/", ""): n for n in names}
-
-    if preferred:
-        pref_key = preferred.replace("models/", "")
-        if pref_key in norm:
-            return norm[pref_key]
-
-    # Common candidates (newer first). We'll map to actual returned names.
-    for candidate in (
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-    ):
-        if candidate in norm:
-            return norm[candidate]
-
-    # As a last resort, return the first model that appears to support generation.
-    for m in available:
-        if _model_supports_generate_content(m):
-            name = _extract_model_name(m)
-            if name:
-                return name
-
-    # Fall back to preferred even if unknown.
-    return preferred or "gemini-1.5-flash"
-
-
-class GeminiQuotaError(RuntimeError):
-    """Raised when the Gemini API returns quota/rate-limit exhaustion."""
+def _pick_models() -> list[str]:
+  # Allow override via env; otherwise prefer newer flash models first.
+  # Model availability depends on your key/account/region.
+  override = (os.getenv("GEMINI_MODEL") or "").strip()
+  candidates = [
+    override or None,
+    "gemini-3.0-flash",
+    "gemini-3-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+  ]
+  return [m for m in candidates if m]
 
 
 def check_news_truth(news_text: str) -> dict:
@@ -119,44 +38,14 @@ def check_news_truth(news_text: str) -> dict:
       - grounding_metadata: search queries, sources etc.
     """
 
-    # Best-effort: load .env for local development.
-    if load_dotenv is not None:
-        load_dotenv(override=False)
-
-    if genai is None or types is None:
-        raise ImportError(
-            "Missing optional dependency for news verification. "
-            "Install `google-genai` (and remove the `google` PyPI package if installed)."
-        )
-
-    # Ensure your Gemini API key is set
-    api_key = (
-        os.getenv("GEMINI_API_KEY")
-        or os.getenv("GOOGLE_API_KEY")
-        or os.getenv("google_api_key")
-    )
+    # Gemini API key: prefer GEMINI_API_KEY; fall back to GOOGLE_API_KEY for repo compatibility.
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise EnvironmentError("GEMINI_API_KEY (or GOOGLE_API_KEY) is not set.")
+        raise EnvironmentError("Missing Gemini API key. Set GEMINI_API_KEY (or GOOGLE_API_KEY) in your .env")
 
-    # Initialize client
-    client = genai.Client(api_key=api_key)
+    genai.configure(api_key=api_key)
 
-    # Many keys/projects have 0 quota for higher-tier models by default.
-    # Allow overriding via env. Keep default to a typically lower-cost model.
-    configured_model = os.getenv("GEMINI_MODEL") or "gemini-1.5-flash"
-    model = configured_model
-
-    # Define the grounding tool: Google Search
-    grounding_tool = types.Tool(
-        google_search=types.GoogleSearch()
-    )
-
-    # Set up configuration to include the tool
-    config = types.GenerateContentConfig(
-        tools=[grounding_tool],
-        # you can optionally set temperature, max output tokens etc.
-        temperature=0.0  # deterministic: less “creative” output
-    )
+    models_to_try = _pick_models()
 
     # Compose the prompt
     prompt = f"""
@@ -228,44 +117,25 @@ Article to verify:
 
     # Call the Gemini API
     try:
+        last_err: Exception | None = None
         response = None
-        last_error: Exception | None = None
-        tried_model_switch = False
-        last_quota_error_msg: str | None = None
+        for model_name in models_to_try:
+          try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            break
+          except Exception as e:
+            last_err = e
+            if _is_model_not_found_error(e):
+              continue
+            raise
 
-        # Simple retry for transient quota/rate limiting.
-        for attempt in range(3):
-            try:
-                response = client.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=config,
-                )
-                last_error = None
-                break
-            except Exception as e:
-                last_error = e
-                msg = _safe_str(e)
-
-                # If the configured model doesn't exist for this API version/key, pick an available model.
-                if ("404" in msg or "NOT_FOUND" in msg) and ("model" in msg.lower()) and not tried_model_switch:
-                    model = _pick_fallback_model(client, configured_model)
-                    tried_model_switch = True
-                    continue
-
-                # Heuristic: retry on 429 / RESOURCE_EXHAUSTED.
-                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                    last_quota_error_msg = msg
-                    # Backoff a bit; avoid hammering the API.
-                    time.sleep(2 + attempt * 3)
-                    continue
-
-                raise
-
-        if last_error is not None and response is None:
-            if last_quota_error_msg is not None:
-                raise GeminiQuotaError(last_quota_error_msg)
-            raise last_error
+        if response is None:
+          raise RuntimeError(
+            "No usable Gemini model found. Tried: "
+            + ", ".join(models_to_try)
+            + (f". Last error: {last_err}" if last_err else "")
+          )
         
         # Check if response is valid
         if not response or not hasattr(response, 'text'):
@@ -307,30 +177,8 @@ Article to verify:
             "claims_analysis": parsed.get("claims", [])
         }
         
-        # Try to extract grounding metadata from the response object
-        try:
-            if hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
-                    grounding_meta = candidate.grounding_metadata
-                    if hasattr(grounding_meta, 'search_entry_point') and grounding_meta.search_entry_point:
-                        search_entry = grounding_meta.search_entry_point
-                        if hasattr(search_entry, 'rendered_content'):
-                            metadata["search_queries"] = [search_entry.rendered_content]
-                    if hasattr(grounding_meta, 'grounding_chunks') and grounding_meta.grounding_chunks:
-                        chunks = grounding_meta.grounding_chunks
-                        sources_from_grounding = []
-                        for chunk in chunks:
-                            if hasattr(chunk, 'web') and chunk.web:
-                                sources_from_grounding.append({
-                                    "title": getattr(chunk.web, 'title', ''),
-                                    "uri": getattr(chunk.web, 'uri', ''),
-                                })
-                        if sources_from_grounding:
-                            metadata["grounding_sources"] = sources_from_grounding
-        except Exception as grounding_error:
-            print(f"Warning: Could not extract grounding metadata: {grounding_error}")
-            metadata["grounding_extraction_error"] = str(grounding_error)
+        # Grounding metadata is only available when using SDK/tooling that supports Google Search grounding.
+        # This implementation keeps metadata minimal to avoid SDK/version mismatch issues.
         
     except json.JSONDecodeError as e:
         print(f"Error parsing JSON response: {e}")
@@ -342,9 +190,6 @@ Article to verify:
         parsed = {"error": "Failed to parse JSON", "raw_response": raw_text if 'raw_text' in locals() else ""}
         metadata = {"error": "Could not extract grounding metadata"}
     
-    except GeminiQuotaError as e:
-        # Let the FastAPI layer map this to HTTP 429.
-        raise
     except Exception as e:
         print(f"Unexpected error: {e}")
         verdict = "Error"

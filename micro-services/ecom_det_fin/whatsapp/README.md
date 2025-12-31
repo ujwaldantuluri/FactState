@@ -1,6 +1,6 @@
-# FactState WhatsApp Service (WPPConnect)
+# Trustify WhatsApp Service (WPPConnect)
 
-This is a standalone WhatsApp integration for FactState using [WPPConnect](https://wppconnect.io/).
+This is a standalone WhatsApp integration for Trustify using [WPPConnect](https://wppconnect.io/).
 It lives in `whatsapp/` and does NOT modify the Python backend.
 
 ## Features
@@ -9,6 +9,7 @@ It lives in `whatsapp/` and does NOT modify the Python backend.
   - `GET /qr` — fetch the latest QR code (base64 string); refresh to pair your phone
   - `POST /send` — send a custom message to a phone number
   - `POST /scan-and-send` — call FastAPI `/api/check-site` for a URL and WhatsApp the result
+- Optional auto-reply for inbound messages (DMs): on first message it sends a menu (Ecommerce / Image / News) and guides the user (includes an Exit option).
 - Optional header token protection via `WHATSAPP_API_TOKEN`
 
 ## Setup (Windows PowerShell)
@@ -41,7 +42,7 @@ npm run dev
 6. Test send:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8088/send -Headers @{"x-api-token"="$env:WHATSAPP_API_TOKEN"} -Body (@{ phone = "+15551234567"; message = "Hello from FactState" } | ConvertTo-Json) -ContentType 'application/json'
+Invoke-RestMethod -Method Post -Uri http://localhost:8088/send -Headers @{"x-api-token"="$env:WHATSAPP_API_TOKEN"} -Body (@{ phone = "+15551234567"; message = "Hello from Trustify" } | ConvertTo-Json) -ContentType 'application/json'
 ```
 
 7. Scan and send a report:
@@ -55,9 +56,12 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8088/scan-and-send -Headers
 Edit `.env`:
 
 - `PORT` — service port (default `8088`)
-- `FASTAPI_BASE_URL` — points to your FastAPI API prefix (default `http://127.0.0.1:8000/api`)
+- `FASTAPI_BASE_URL` — FastAPI base URL (default `http://127.0.0.1:8000`). The bot will try `/ecommerce/analyze-advanced` first and fall back to `/api/check-site`.
 - `WHATSAPP_SESSION` — WPPConnect session name
 - `WHATSAPP_API_TOKEN` — header token for basic protection
+- `DEFAULT_PHONE` — optional default recipient phone (digits or +E.164); used when `phone` is omitted in `/send` and `/scan-and-send`
+- `AUTO_REPLY` — set to `false` to disable inbound auto-replies (default: enabled)
+- `ALLOWED_INBOUND_NUMBERS` — optional comma-separated allowlist for inbound auto-replies (digits or +E.164)
 
 ## Notes
 - The service stores the latest QR string under `whatsapp/qr/latest.txt`.

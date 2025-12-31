@@ -1,12 +1,9 @@
 pinecone-client
 langchain
 langchain-google-genai
+google-generativeai>=0.8.0
 langchain-ollama
 python-dotenv
 beautifulsoup4
 requests
 google-ai-generativelanguage
-
-# Direct Gemini SDKs used by the codebase
-google-genai
-google-generativeai

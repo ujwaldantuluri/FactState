@@ -114,11 +114,17 @@ class FakeInternshipDetectorAPI:
         verification_checks.update(social_checks)
 
         all_scores = [website_score, email_score, desc_score, contact_score, social_score, timing_score]
-        confidence_score = sum(all_scores) / len([s for s in all_scores if s is not None])
+        # Interpret scores as "suspicion points" (0..100-ish). Summing avoids diluting
+        # a few strong signals into an artificially low average.
+        confidence_score = float(min(100, sum(s for s in all_scores if s is not None)))
 
         risk_level = self._calculate_risk_level(confidence_score, len(red_flags))
-        is_suspicious = confidence_score > 60 or len(red_flags) >= 4
-        reason = "High confidence score" if confidence_score > 60 else "Multiple red flags" if len(red_flags) >= 4 else "Low risk indicators"
+        is_suspicious = confidence_score >= 60 or len(red_flags) >= 4
+        reason = (
+            "High confidence score" if confidence_score >= 60
+            else "Multiple red flags" if len(red_flags) >= 4
+            else "Low risk indicators"
+        )
 
         result = DetectionResponse(
             is_suspicious=is_suspicious,
@@ -149,6 +155,15 @@ class FakeInternshipDetectorAPI:
                 score += 15
         return score, flags
 
+    def _website_domain(self, website: str | None) -> str | None:
+        if not website:
+            return None
+        parsed_url = urlparse(website if website.startswith("http") else f"http://{website}")
+        host = (parsed_url.netloc or "").lower().strip()
+        if host.startswith("www."):
+            host = host[4:]
+        return host or None
+
     def _check_email_domain(self, email):
         flags = []
         score = 0
@@ -176,6 +191,24 @@ class FakeInternshipDetectorAPI:
         if not info.phone or not info.address:
             flags.append("Missing essential contact information")
             score += 10
+
+        # Basic phone sanity check (very short numbers are often fake).
+        if info.phone:
+            digits = re.sub(r"\D", "", info.phone)
+            if len(digits) < 10:
+                flags.append("Phone number looks invalid/too short")
+                score += 15
+
+        # Email domain should usually match the company website domain.
+        if info.email and info.website:
+            email_domain = info.email.split("@")[-1].lower().strip()
+            website_domain = self._website_domain(info.website)
+            if website_domain and not (
+                email_domain == website_domain or email_domain.endswith("." + website_domain)
+            ):
+                flags.append("Email domain does not match website domain")
+                score += 20
+
         return score, flags
 
     def _social_media_verification(self, info: CompanyInfoRequest):

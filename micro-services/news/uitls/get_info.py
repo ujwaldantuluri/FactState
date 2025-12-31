@@ -4,12 +4,10 @@ from .scrape_wed import WebScrapingAgent
 from dataclasses import asdict
 from .get_urls import NewsSearcher
 import os
-
-try:
-    # Legacy Gemini SDK (package: google-generativeai)
-    import google.generativeai as genai  # type: ignore
-except Exception:  # pragma: no cover
-    genai = None
+from google import genai
+import os
+from dotenv import load_dotenv
+import google.generativeai as genai  # Correct import
 
 # Basic logger setup
 logger = logging.getLogger(__name__)
@@ -28,10 +26,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("google_api_key")
 if not GOOGLE_API_KEY:
     logger.warning("GOOGLE_API_KEY not found. Rephrase model may not work.")
 else:
-    if genai is None:
-        logger.warning("google-generativeai is not installed. Rephrase model may not work.")
-    else:
-        genai.configure(api_key=GOOGLE_API_KEY)
+    genai.configure(api_key=GOOGLE_API_KEY)
 
 
 def rephrase_query_for_search(original_query: str) -> list[str]:
@@ -41,10 +36,6 @@ def rephrase_query_for_search(original_query: str) -> list[str]:
     try:
         if not GOOGLE_API_KEY:
             logger.warning("Skipping rephrase: GOOGLE_API_KEY missing.")
-            return [original_query]
-
-        if genai is None:
-            logger.warning("Skipping rephrase: google-generativeai not installed.")
             return [original_query]
 
         model = genai.GenerativeModel('gemini-1.5-flash')

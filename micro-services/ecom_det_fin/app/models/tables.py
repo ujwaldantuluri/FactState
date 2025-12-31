@@ -4,6 +4,19 @@ from datetime import datetime
 from sqlmodel import SQLModel, Field
 from enum import Enum
 
+
+class ScanLog(SQLModel, table=True):
+    """Unified scan history across detectors for dashboard/history UI."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scan_type: str = Field(index=True)
+    content: str
+    url: Optional[str] = Field(default=None, index=True)
+    verdict: str = Field(index=True)
+    risk_score: float
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    extra_json: str = Field(default="{}")
+
 class FeedbackStatus(str, Enum):
     PENDING_VERIFICATION = "pending_verification"
     VERIFIED_DELIVERED = "verified_delivered"

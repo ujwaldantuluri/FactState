@@ -1,0 +1,85 @@
+SAMPLE FAKE NEWS ARTICLES FOR TESTING
+=====================================
+
+ARTICLE 1: TECHNOLOGY CONSPIRACY
+---------------------------------
+"Apple CEO Tim Cook Admits iPhones Spy on Users 24/7 for Government Surveillance
+
+In a shocking revelation during a closed-door Senate hearing yesterday, Apple CEO Tim Cook allegedly admitted that all iPhones manufactured since 2018 contain hidden government surveillance chips that record conversations even when the device is turned off. According to leaked documents from an unnamed whistleblower, Cook stated that Apple was forced to comply with a secret NSA program called 'Operation Digital Eye' that requires tech companies to install backdoors in their devices.
+
+The whistleblower claims that these chips can activate cameras and microphones remotely without any user notification, and that the data is automatically transmitted to government servers every 6 hours. Cook reportedly said during the hearing: 'We had no choice but to comply, or face complete shutdown of our operations.'
+
+The leaked documents also suggest that similar programs exist for Samsung, Google, and Microsoft devices. Privacy advocates are calling this the biggest surveillance scandal since Edward Snowden's revelations in 2013."
+
+ARTICLE 2: HEALTH MISINFORMATION
+--------------------------------
+"New Study: Drinking Coffee Daily Increases Risk of Heart Disease by 400%
+
+A groundbreaking study published in the International Journal of Cardiovascular Health has found that people who drink coffee daily have a 400% higher risk of developing serious heart conditions compared to non-coffee drinkers. The study, conducted by Dr. Sarah Mitchell at the prestigious Stanford Medical Research Institute, followed 50,000 participants over 10 years.
+
+According to Dr. Mitchell, 'The caffeine in coffee causes microscopic tears in heart muscle tissue that accumulate over time, leading to severe cardiovascular damage.' The study found that even decaffeinated coffee poses risks due to chemical processing methods that leave harmful residues.
+
+The research also revealed that coffee consumption is linked to a 250% increase in stroke risk and can cause permanent damage to the nervous system. Major health organizations are now considering recommending complete coffee bans for anyone over 30 years old."
+
+ARTICLE 3: ENVIRONMENTAL SCARE
+-------------------------------
+"Antarctica Ice Sheet Completely Melted, Sea Levels to Rise 200 Feet by 2025
+
+Satellite images released by NASA yesterday show that the entire Antarctic ice sheet has melted due to unprecedented warming caused by underwater volcanic activity. Scientists estimate that global sea levels will rise by 200 feet within the next 6 months, making most coastal cities uninhabitable.
+
+Dr. James Thompson, lead researcher at the International Climate Research Center, stated: 'We've never seen anything like this. The volcanic activity beneath Antarctica has created temperatures of over 500 degrees Fahrenheit under the ice, causing complete liquefaction of ice sheets that took millions of years to form.'
+
+Emergency evacuation plans are already being implemented for major coastal cities including New York, Miami, Los Angeles, and London. The United Nations has declared a global climate emergency and is calling for immediate international cooperation to deal with the crisis."
+
+ARTICLE 4: POLITICAL CONSPIRACY
+--------------------------------
+"Secret Recording Reveals World Leaders Plan Global Currency Reset for January 2025
+
+A leaked audio recording from a private meeting between world leaders at the recent G20 summit reveals plans to eliminate all national currencies and implement a single global digital currency by January 2025. The recording, obtained by independent journalist Mark Stevens, captures conversations between leaders discussing 'Operation New Dawn' - a coordinated effort to crash existing financial systems.
+
+In the recording, an unidentified voice can be heard saying: 'Once we implement the global reset, we'll have complete control over every financial transaction worldwide. Cash will be obsolete, and we'll be able to monitor and control all economic activity.'
+
+The plan allegedly involves deliberately causing hyperinflation in major economies to justify the currency reset. Central banks in the US, Europe, and Asia are reportedly already preparing the infrastructure for the new system, which would be controlled by a single global financial authority."
+
+SHORTER TEST CLAIMS
+===================
+
+For quick testing, here are some shorter fake claims:
+
+1. "5G cell towers cause COVID-19 by weakening the immune system through radiation exposure."
+
+2. "The moon landing in 1969 was filmed in a Hollywood studio by director Stanley Kubrick."
+
+3. "Chemtrails are government weather control programs that spray mind-control chemicals."
+
+4. "Vaccines contain microchips designed to track and control human behavior."
+
+5. "The Earth is actually flat, and NASA has been covering up the truth for decades."
+
+6. "Drinking bleach can cure cancer and COVID-19 by killing harmful bacteria in the body."
+
+7. "WiFi signals cause autism in children by disrupting brain development."
+
+8. "The COVID-19 pandemic was planned by billionaires to reduce world population."
+
+9. "Eating organic food can completely prevent all forms of cancer."
+
+10. "Climate change is a hoax created by scientists to get research funding."
+
+USAGE INSTRUCTIONS
+==================
+
+1. Copy and paste any of these articles/claims into your fact-checking tool
+2. The system should identify them as false or misleading
+3. Look for proper source verification and evidence-based debunking
+4. Check that the system provides accurate explanations for why these are false
+
+These examples are designed to test various aspects of fact-checking:
+- Technology misinformation
+- Health misinformation  
+- Environmental misinformation
+- Political conspiracy theories
+- Well-known debunked claims
+- Mix of plausible-sounding but false information
+
+Remember: These are FAKE examples created for testing purposes only!
