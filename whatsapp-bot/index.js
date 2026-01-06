@@ -4,6 +4,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import express from 'express';
 import pino from 'pino';
+import fs from 'fs';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
@@ -15,6 +16,9 @@ const ALLOWED = (process.env.ALLOWED_NUMBERS || '')
 const BASE_URL = process.env.BACKEND_BASE_URL || 'http://127.0.0.1:8000';
 const SESSION = process.env.WPP_SESSION_NAME || 'factstate-session';
 const PORT = parseInt(process.env.PORT || '3030', 10);
+
+// Ensure token directory exists so QR files can be written
+fs.mkdirSync('./tokens', { recursive: true });
 
 // In-memory user states
 const startedUsers = new Set();
@@ -226,8 +230,18 @@ function mapListTextToId(textLower) {
 wppconnect
   .create({
     session: SESSION,
+    catchQR: (base64Qr, asciiQR) => {
+      try {
+        const png = base64Qr.replace('data:image/png;base64,', '');
+        fs.writeFileSync('./tokens/latest-qr.png', Buffer.from(png, 'base64'));
+        logger.info('QR saved to tokens/latest-qr.png');
+        if (asciiQR) logger.info(asciiQR);
+      } catch (err) {
+        logger.warn({ err }, 'Failed to save QR image');
+      }
+    },
+    logQR: false, // keep console cleaner; QR is saved to file instead
     puppeteerOptions: { args: ['--no-sandbox', '--disable-setuid-sandbox'] },
-    logQR: true,
     debug: false,
   })
   .then((client) => start(client))
